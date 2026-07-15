@@ -207,13 +207,10 @@ class Miner(BaseMinerNeuron):
         if not has_predictor:
             return files
         for relative in (
-            "poker44/ensemble_predict.py",
             "poker44/model_transformer/predict.py",
             "poker44/model_transformer/model.py",
             "poker44/model_transformer/features.py",
             "poker44/model_transformer/dataset.py",
-            "poker44/model_mlp/predict.py",
-            "poker44/model_lightgbm/predict.py",
         ):
             candidate = repo_root / relative
             if candidate.exists():
@@ -223,29 +220,10 @@ class Miner(BaseMinerNeuron):
     def _load_predictor(self):
         """Load the best available predictor.
 
-        Preference order: calibrated ensemble -> single set-Transformer ->
-        heuristic fallback (returns None). Any failure degrades to the next
-        option so model loading never crashes the miner.
+        Preference order: single set-Transformer checkpoint -> heuristic
+        fallback (returns None). Any failure degrades to the heuristic so
+        model loading never crashes the miner.
         """
-        # 1) Calibrated ensemble (transformer + mlp + lightgbm blend).
-        try:
-            from poker44.ensemble_predict import EnsemblePredictor, DEFAULT_MANIFEST
-
-            if DEFAULT_MANIFEST.exists():
-                predictor = EnsemblePredictor()
-                self.model_artifact_path = DEFAULT_MANIFEST
-                bt.logging.info(
-                    f"Loaded ensemble model ({list(predictor.predictors.keys())}) "
-                    f"from {DEFAULT_MANIFEST}"
-                )
-                return predictor
-            bt.logging.info(
-                f"No ensemble manifest at {DEFAULT_MANIFEST}; trying single model."
-            )
-        except Exception as exc:  # noqa: BLE001 - fall through to single model
-            bt.logging.warning(f"Ensemble load failed ({exc}); trying single model.")
-
-        # 2) Single set-Transformer checkpoint.
         ckpt = os.environ.get("POKER44_MODEL_CKPT")
         try:
             from poker44.model_transformer.predict import Predictor, DEFAULT_ARTIFACT

@@ -31,6 +31,27 @@ from poker44.model_transformer.model import BotDetector, ModelConfig
 DEFAULT_ARTIFACT = Path(__file__).resolve().parent / "artifacts" / "model.pt"
 
 
+def filter_latest_release_version(
+    examples: Sequence[BatchExample], latest_version: str
+) -> List[BatchExample]:
+    """Drop examples whose ``release_version`` doesn't match the latest one.
+
+    Downloaded releases can span multiple benchmark schema/release versions;
+    training on stale versions can hurt generalization, so only the current
+    latest ``releaseVersion`` (e.g. ``v1.13``) is kept.
+    """
+    if not latest_version:
+        return list(examples)
+    kept = [ex for ex in examples if ex.release_version == latest_version]
+    dropped = len(examples) - len(kept)
+    if dropped:
+        print(
+            f"Ignoring {dropped} example(s) not matching latest release "
+            f"version {latest_version!r}."
+        )
+    return kept
+
+
 def resolve_dates(client, dates, num_releases):
     if dates:
         return list(dates)
@@ -97,7 +118,7 @@ def train_transformer(
     val_ex: Sequence[BatchExample],
     *,
     feature_dim: int,
-    epochs: int = 60,
+    epochs: int = 150,
     batch_size: int = 32,
     lr: float = 1e-3,
     weight_decay: float = 1e-4,
@@ -108,6 +129,9 @@ def train_transformer(
     config_overrides: Optional[dict] = None,
     num_workers: int = 0,
     verbose: bool = True,
+    warmup_epochs: int = 10,
+    t0: int = 0,
+    t_mult: int = 1,
 ) -> Tuple[BotDetector, Standardizer, Dict[str, float]]:
     """Train the Transformer and return (model, standardizer, best_val_metrics)."""
     torch.manual_seed(seed)
@@ -128,7 +152,20 @@ def train_transformer(
     config = ModelConfig(feature_dim=feature_dim, **(config_overrides or {}))
     model = BotDetector(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
+
+    warmup = max(warmup_epochs, 0)
+    cosine_epochs = max(epochs - warmup, 1)
+    _t0 = t0 if t0 > 0 else cosine_epochs
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=max(warmup, 1)
+    )
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=_t0, T_mult=max(t_mult, 1), eta_min=lr * 1e-2
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched],
+        milestones=[max(warmup, 1)]
+    )
 
     best_reward = -1.0
     best_state = None
@@ -173,7 +210,7 @@ def main() -> None:
     parser.add_argument("--dates", nargs="*", default=None)
     parser.add_argument("--val-dates", nargs="*", default=None)
     parser.add_argument("--num-releases", type=int, default=9)
-    parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -186,6 +223,14 @@ def main() -> None:
     parser.add_argument("--max-hands", type=int, default=60)
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=44)
+    parser.add_argument("--num-seeds", type=int, default=3,
+                        help="Number of random seeds to try; best val reward is saved.")
+    parser.add_argument("--warmup-epochs", type=int, default=10,
+                        help="Linear LR warmup epochs before cosine schedule.")
+    parser.add_argument("--t0", type=int, default=0,
+                        help="T_0 for CosineAnnealingWarmRestarts (0 = single full cycle).")
+    parser.add_argument("--t-mult", type=int, default=1,
+                        help="T_mult for CosineAnnealingWarmRestarts.")
     parser.add_argument("--augment", action="store_true", help="Hand-subsampling augmentation")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"])
@@ -209,22 +254,52 @@ def main() -> None:
     if not examples:
         raise SystemExit("No examples loaded; check network/API availability.")
 
+    latest_version = client.status().get("releaseVersion", "")
+    print(f"Latest benchmark release version: {latest_version!r}")
+    examples = filter_latest_release_version(examples, latest_version)
+    print(f"{len(examples)} batch examples after version filtering")
+    if not examples:
+        raise SystemExit(
+            "No examples left after filtering to the latest release version."
+        )
+
     train_ex, val_ex = split_by_release(examples, args.val_dates, args.val_fraction, args.seed)
     print(f"Train={len(train_ex)} (bots={sum(ex.label for ex in train_ex)}) Val={len(val_ex)}")
 
     extractor = HandFeatureExtractor()
-    model, standardizer, best_metrics = train_transformer(
-        train_ex, val_ex,
-        feature_dim=extractor.feature_dim,
-        epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
-        weight_decay=args.weight_decay, max_hands=args.max_hands, device=device,
-        augment=args.augment, seed=args.seed, num_workers=args.num_workers,
-        config_overrides=dict(
-            d_model=args.d_model, depth=args.depth, n_heads=args.n_heads,
-            ff_mult=args.ff_mult, head_hidden=args.head_hidden, dropout=args.dropout,
-        ),
-    )
-    print("Best validation metrics:")
+    seeds = [args.seed + i for i in range(max(args.num_seeds, 1))]
+    best_overall_reward = -1.0
+    best_overall_model: Optional[BotDetector] = None
+    best_overall_standardizer: Optional[Standardizer] = None
+    best_overall_metrics: Dict[str, float] = {}
+
+    for run_idx, seed in enumerate(seeds):
+        print(f"\n=== Seed run {run_idx + 1}/{len(seeds)} (seed={seed}) ===")
+        model, standardizer, metrics = train_transformer(
+            train_ex, val_ex,
+            feature_dim=extractor.feature_dim,
+            epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+            weight_decay=args.weight_decay, max_hands=args.max_hands, device=device,
+            augment=args.augment, seed=seed, num_workers=args.num_workers,
+            warmup_epochs=args.warmup_epochs, t0=args.t0, t_mult=args.t_mult,
+            config_overrides=dict(
+                d_model=args.d_model, depth=args.depth, n_heads=args.n_heads,
+                ff_mult=args.ff_mult, head_hidden=args.head_hidden, dropout=args.dropout,
+            ),
+        )
+        reward = metrics.get("validator_reward", -1.0)
+        print(f"  validator_reward={reward:.4f}  " + format_metrics(metrics))
+        if reward > best_overall_reward:
+            best_overall_reward = reward
+            best_overall_model = model
+            best_overall_standardizer = standardizer
+            best_overall_metrics = metrics
+            print(f"  ^ New best (seed={seed})")
+
+    model = best_overall_model
+    standardizer = best_overall_standardizer
+    best_metrics = best_overall_metrics
+    print(f"\nBest overall validation metrics (reward={best_overall_reward:.4f}):")
     print("  " + format_metrics(best_metrics))
 
     save_checkpoint(args.out, model, standardizer, extractor, meta={
