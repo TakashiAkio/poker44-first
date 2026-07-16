@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "poker44"
+version = "0.1.1"
+description = "Poker44 subnet miner: set-Transformer poker bot detector with a heuristic fallback."
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.6",
+    "requests>=2.31",
+    "bittensor>=9,<10",
+    "python-dotenv>=1.0",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "pandas>=2.3.3",
+    "wandb>=0.19",
+    "torch>=2.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["poker44*"]

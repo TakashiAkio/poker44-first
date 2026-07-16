@@ -54,7 +54,7 @@ class Miner(BaseMinerNeuron):
         if self.predictor is not None:
             bt.logging.info("Poker44 Miner started with trained set-Transformer model")
             manifest_defaults = {
-                "model_name": "poker44-set-transformer",
+                "model_name": "poker44-ck-mon",
                 "model_version": "1",
                 "framework": "pytorch",
                 "license": "MIT",
@@ -63,9 +63,12 @@ class Miner(BaseMinerNeuron):
                 "artifact_url": artifact_url,
                 "artifact_sha256": artifact_sha256,
                 "notes": (
-                    "Hero-centric set-Transformer over hands, trained on the public "
-                    "Poker44 training benchmark. Falls back to a heuristic if the "
-                    "model checkpoint is unavailable."
+                    "Hero-centric masked set-Transformer over per-hand features "
+                    "(input projection -> padding-masked self-attention encoder, "
+                    "depth=1/d_model=64 -> attention + masked-mean pooling -> MLP "
+                    "head producing one bot-risk logit per chunk). Trained on the "
+                    "public Poker44 v1.13 training benchmark. Falls back to a "
+                    "heuristic if the model checkpoint is unavailable."
                 ),
                 "open_source": True,
                 "inference_mode": "local",
@@ -259,17 +262,23 @@ class Miner(BaseMinerNeuron):
 
     async def forward(self, synapse: DetectionSynapse) -> DetectionSynapse:
         """Assign one bot-risk score per chunk, in order."""
+        print(f"forward started...")
         chunks = synapse.chunks or []
+        print(f"chunks length={len(chunks)}")
         scores = self._model_scores(chunks)
         source = "model"
         if scores is None:
             scores = [self.score_chunk(chunk) for chunk in chunks]
+            print(f"heuristic scores length={len(scores)}")
             source = "heuristic"
         synapse.risk_scores = scores
         synapse.predictions = [s >= 0.5 for s in scores]
+
         synapse.model_manifest = dict(self.model_manifest)
         bt.logging.info(f"Miner Predictions: {synapse.predictions}")
         bt.logging.info(f"Scored {len(chunks)} chunks with {source} risks.")
+
+        print(f"forward ended with scores={scores} model_manifest={self.model_manifest}")
         return synapse
 
     @staticmethod

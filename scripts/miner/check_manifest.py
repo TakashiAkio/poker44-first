@@ -72,9 +72,30 @@ def _git(*args: str) -> str:
         return ""
 
 
+def _normalize_repo_url(url: str) -> str:
+    """Mirror Miner._normalize_repo_url without importing bittensor."""
+    cleaned = str(url or "").strip()
+    if not cleaned:
+        return ""
+    if cleaned.startswith("git@"):
+        host_path = cleaned.split(":", 1)
+        if len(host_path) == 2:
+            host = host_path[0][4:]
+            path = host_path[1]
+            if path.endswith(".git"):
+                path = path[:-4]
+            return f"https://{host}/{path}"
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    return cleaned
+
+
 def main() -> int:
     has_predictor = _has_trained_artifacts()
     runtime_commit = _git("rev-parse", "HEAD")
+    runtime_repo_url = _normalize_repo_url(
+        _git("config", "--get", "remote.origin.url")
+    ) or "https://github.com/Poker44/Poker44-subnet"
 
     if has_predictor:
         defaults = {
@@ -82,7 +103,7 @@ def main() -> int:
             "model_version": "1",
             "framework": "pytorch",
             "license": "MIT",
-            "repo_url": "https://github.com/Poker44/Poker44-subnet",
+            "repo_url": runtime_repo_url,
             "repo_commit": runtime_commit,
             "open_source": True,
             "inference_mode": "local",
@@ -100,7 +121,7 @@ def main() -> int:
             "model_version": "1",
             "framework": "python-heuristic",
             "license": "MIT",
-            "repo_url": "https://github.com/Poker44/Poker44-subnet",
+            "repo_url": runtime_repo_url,
             "repo_commit": runtime_commit,
             "open_source": True,
             "inference_mode": "remote",
