@@ -1,6 +1,8 @@
+bittensor>=9,<10
+async-substrate-interface>=1.6,<2
+scalecodec==1.2.11
 pydantic>=2.6
 requests>=2.31
-bittensor
 python-dotenv>=1.0
 numpy>=1.24
 scikit-learn>=1.3
