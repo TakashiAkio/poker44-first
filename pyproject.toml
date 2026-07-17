@@ -11,7 +11,7 @@ license = { text = "MIT" }
 dependencies = [
     "pydantic>=2.6",
     "requests>=2.31",
-    "bittensor>=9,<10",
+    "bittensor>=10.3.0,<11",
     "python-dotenv>=1.0",
     "numpy>=1.24",
     "scikit-learn>=1.3",
