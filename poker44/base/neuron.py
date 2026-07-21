@@ -93,9 +93,19 @@ class BaseNeuron(ABC):
                 self.metagraph = self.subtensor.metagraph(self.config.netuid)
                 break
             except Exception as e:
+                error_text = str(e)
                 bt.logging.error(
-                    "Couldn't init subtensor and metagraph with error: {}".format(e)
+                    "Couldn't init subtensor and metagraph with error: {}".format(error_text)
                 )
+                if any(
+                    marker in error_text
+                    for marker in ("Invalid type for data", "TypeDefComposite", "metadata")
+                ):
+                    bt.logging.error(
+                        "This looks like a Bittensor runtime metadata decode error. "
+                        "The Bittensor 431 runtime requires bittensor SDK >=10.3.0,<11 "
+                        "for this subnet release. Upgrade your environment and restart."
+                    )
                 bt.logging.error(
                     "If you use public RPC endpoint try to move to local node"
                 )

@@ -18,9 +18,29 @@ MIN_REQUIRED_MANIFEST_FIELDS = [
     "training_data_statement",
     "private_data_attestation",
 ]
-REFERENCE_MINER_MODEL_NAME = "poker44-reference-heuristic"
+REFERENCE_MINER_MODEL_NAMES = {
+    "poker44-reference-heuristic",
+    "poker44_benchmark_supervised",
+    "poker44_benchmark_supervised_human_baseline",
+}
 REFERENCE_REPO_URL = "https://github.com/Poker44/Poker44-subnet"
 GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_ARTIFACT_VERSION_RE = re.compile(r"_v(\d+)$", re.IGNORECASE)
+
+
+def artifact_model_identity(artifact_path: str | Path) -> Dict[str, str]:
+    """Derive manifest ``model_name`` / ``model_version`` from a joblib filename."""
+    path = Path(artifact_path)
+    stem = (path.stem or "poker44-model").strip()
+    version = "1"
+    match = _ARTIFACT_VERSION_RE.search(stem)
+    if match:
+        version = match.group(1)
+    return {
+        "model_name": stem,
+        "model_version": version,
+        "artifact_filename": path.name,
+    }
 
 
 def _parse_bool(value: str | None, *, default: bool = False) -> bool:
@@ -61,7 +81,7 @@ def build_local_model_manifest(
         ),
         "model_name": os.getenv(
             "POKER44_MODEL_NAME",
-            str(default_values.get("model_name", "poker44-reference-heuristic")),
+            str(default_values.get("model_name", "poker44_benchmark_supervised")),
         ),
         "model_version": os.getenv(
             "POKER44_MODEL_VERSION",
@@ -69,7 +89,7 @@ def build_local_model_manifest(
         ),
         "framework": os.getenv(
             "POKER44_MODEL_FRAMEWORK",
-            str(default_values.get("framework", "python-heuristic")),
+            str(default_values.get("framework", "benchmark-supervised")),
         ),
         "license": os.getenv(
             "POKER44_MODEL_LICENSE",
@@ -111,6 +131,15 @@ def build_local_model_manifest(
             "POKER44_MODEL_PRIVATE_DATA_ATTESTATION",
             str(default_values.get("private_data_attestation", "")),
         ).strip(),
+        "data_attestation": os.getenv(
+            "POKER44_MODEL_DATA_ATTESTATION",
+            str(
+                default_values.get(
+                    "data_attestation",
+                    default_values.get("private_data_attestation", ""),
+                )
+            ),
+        ).strip(),
         "inference_mode": os.getenv(
             "POKER44_MODEL_INFERENCE_MODE",
             str(default_values.get("inference_mode", "remote")),
@@ -125,6 +154,9 @@ def build_local_model_manifest(
             str(default_values.get("notes", "")),
         ).strip(),
     }
+    artifact_filename = str(default_values.get("artifact_filename", "")).strip()
+    if artifact_filename:
+        manifest["artifact_filename"] = artifact_filename
     return normalize_model_manifest(manifest)
 
 
@@ -181,7 +213,7 @@ def _uses_reference_repo(manifest: Mapping[str, Any]) -> bool:
 
 
 def _is_reference_miner_manifest(manifest: Mapping[str, Any]) -> bool:
-    return str(manifest.get("model_name", "")).strip() == REFERENCE_MINER_MODEL_NAME
+    return str(manifest.get("model_name", "")).strip() in REFERENCE_MINER_MODEL_NAMES
 
 
 def _has_implementation_files(manifest: Mapping[str, Any]) -> bool:

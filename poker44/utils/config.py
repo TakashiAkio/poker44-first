@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import os
-
-# Bittensor >=10 ignores a manually-built ArgumentParser passed to `bt.Config`
-# unless BT_NO_PARSE_CLI_ARGS is falsy (it defaults to "true"). Without this,
-# every custom `--neuron.*`, `--blacklist.*`, `--wandb.*`, and `--netuid`
-# argument is silently dropped and `config.neuron` becomes None. Force CLI
-# parsing on to restore the pre-10.x behaviour this subnet relies on.
-os.environ.setdefault("BT_NO_PARSE_CLI_ARGS", "false")
+from types import SimpleNamespace
 
 import bittensor as bt
+import os
 import traceback
 
 traceback.format_exc()
@@ -27,6 +21,12 @@ def add_args(cls, parser: argparse.ArgumentParser) -> None:
     bt.Axon.add_args(parser)
     
     parser.add_argument("--netuid", type=int, help="Subnet netuid", default=126)
+    parser.add_argument(
+        "--neuron.name",
+        type=str,
+        default=getattr(cls, "neuron_type", "neuron"),
+        help="Neuron name used for local logging/checkpoint paths.",
+    )
     
     parser.add_argument(
         "--neuron.device",
@@ -155,12 +155,6 @@ def add_args(cls, parser: argparse.ArgumentParser) -> None:
 
 def add_validator_args(cls, parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--neuron.name",
-        type=str,
-        default="validator",
-        help="Trials for this neuron go in neuron.root / (wallet_cold - wallet_hot) / netuid / neuron.name.",
-    )
-    parser.add_argument(
         "--validator.manual_players",
         nargs="*",
         default=[],
@@ -170,21 +164,59 @@ def add_validator_args(cls, parser: argparse.ArgumentParser) -> None:
 
 def add_miner_args(cls, parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--neuron.name",
-        type=str,
-        default="miner",
-        help="Trials for this neuron go in neuron.root / (wallet_cold - wallet_hot) / netuid / neuron.name.",
-    )
-    parser.add_argument(
         "--miner.mock",
         action="store_true",
         help="Placeholder flag retained for compatibility.",
     )
 
 
+def _ensure_neuron_config(cls, config: "bt.Config") -> None:
+    env_netuid = os.getenv("NETUID")
+    if getattr(config, "netuid", None) is None:
+        config.netuid = int(env_netuid) if env_netuid else 126
+
+    if getattr(config, "wallet", None) is None:
+        config.wallet = SimpleNamespace()
+    wallet_defaults = {
+        "name": os.getenv("WALLET_NAME"),
+        "hotkey": os.getenv("HOTKEY"),
+        "path": os.getenv("WALLET_PATH"),
+    }
+    for key, value in wallet_defaults.items():
+        current = getattr(config.wallet, key, None)
+        if value and (current is None or current == "default"):
+            setattr(config.wallet, key, value)
+
+    if getattr(config, "subtensor", None) is None:
+        config.subtensor = SimpleNamespace()
+    env_network = os.getenv("NETWORK")
+    if env_network and not getattr(config.subtensor, "network", None):
+        config.subtensor.network = env_network
+
+    if getattr(config, "neuron", None) is None:
+        config.neuron = SimpleNamespace()
+
+    defaults = {
+        "name": getattr(cls, "neuron_type", "neuron"),
+        "device": "cpu",
+        "epoch_length": 50,
+        "disable_set_weights": False,
+        "wait_for_inclusion": True,
+        "wait_for_finalization": True,
+        "moving_average_alpha": 0.05,
+        "num_concurrent_forwards": 1,
+        "timeout": 180.0,
+        "axon_off": False,
+    }
+    for key, value in defaults.items():
+        if not hasattr(config.neuron, key) or getattr(config.neuron, key) is None:
+            setattr(config.neuron, key, value)
+
+
 
 def check_config(cls, config: "bt.Config"):
     r"""Checks/validates the config namespace object."""
+    _ensure_neuron_config(cls, config)
     full_path = os.path.expanduser(
         "{}/{}/{}/netuid{}/{}".format(
             config.logging.logging_dir,  # TODO: change from ~/.bittensor/miners to ~/.bittensor/neurons
