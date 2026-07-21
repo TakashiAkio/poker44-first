@@ -5,8 +5,16 @@ from __future__ import annotations
 import argparse
 from types import SimpleNamespace
 
-import bittensor as bt
 import os
+
+# Bittensor >=10 ignores a manually-built ArgumentParser passed to `bt.Config`
+# unless BT_NO_PARSE_CLI_ARGS is falsy (it defaults to "true"). Without this,
+# every custom `--neuron.*`, `--blacklist.*`, `--wandb.*`, and `--netuid`
+# argument is silently dropped and `config.neuron` becomes None. Force CLI
+# parsing on to restore the pre-10.x behaviour this subnet relies on.
+os.environ.setdefault("BT_NO_PARSE_CLI_ARGS", "false")
+
+import bittensor as bt
 import traceback
 
 traceback.format_exc()
