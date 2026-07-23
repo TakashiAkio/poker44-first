@@ -636,6 +636,8 @@ class Miner(BaseMinerNeuron):
         caller = self._caller_hotkey(synapse)
         chunks = [self._compress_chunk(list(chunk or [])) for chunk in (synapse.chunks or [])]
         chunk_sizes = [len(chunk) for chunk in chunks]
+        print("forward started")
+        print(f"chunk_sizes = {chunk_sizes}")
         bt.logging.info(
             "Validator query received | "
             f"caller={caller} "
@@ -781,6 +783,8 @@ class Miner(BaseMinerNeuron):
             f"per_chunk_ms={per_chunk_ms:.2f} "
             f"per_hand_ms={per_hand_ms:.2f}"
         )
+        print(f"risk_scores={synapse.risk_scores}")
+        print(f"manifest={synapse.model_manifest}")
         return synapse
 
     async def blacklist(self, synapse: DetectionSynapse) -> Tuple[bool, str]:

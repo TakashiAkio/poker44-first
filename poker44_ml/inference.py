@@ -18,6 +18,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+from poker44_ml.calibration import ScoreCalibrator
 from poker44_ml.features import chunk_features
 
 try:
@@ -66,6 +67,14 @@ class Poker44Model:
             self.calibrator = None
         else:
             self.score_remap = {}
+        # Reward-aware, FPR-capped calibrator embedded at training time. When
+        # present it SUPERSEDES the fixed score_remap + score_logit stages
+        # (which the trainer disables), applying its own monotone
+        # spread -> isotonic -> remap -> logit-shift block instead. Restored from
+        # metadata so old artifacts without it fall back to the legacy pipeline.
+        self.score_calibrator = ScoreCalibrator.from_dict(
+            self.metadata.get("score_calibrator")
+        )
         self.model_weights = list(
             artifact.get("model_weights")
             or self.metadata.get("model_weights")
@@ -262,6 +271,12 @@ class Poker44Model:
             output.append(self._clamp01(1.0 / (1.0 + math.exp(-adjusted))))
         return output
 
+    def _apply_score_calibrator(self, scores: list[float]) -> list[float]:
+        if not scores or self.score_calibrator is None:
+            return [self._clamp01(value) for value in scores]
+        transformed = self.score_calibrator.transform(scores)
+        return [self._clamp01(float(value)) for value in transformed]
+
     def predict_chunk_scores(self, chunks: list[list[dict[str, Any]]]) -> list[float]:
         if not chunks:
             return []
@@ -270,7 +285,8 @@ class Poker44Model:
         calibrated_scores = self._apply_calibrator(raw_scores)
         remapped_scores = self._apply_score_remap(calibrated_scores)
         logit_scores = self._apply_score_logit(remapped_scores)
-        return [round(self._clamp01(value), 6) for value in logit_scores]
+        final_scores = self._apply_score_calibrator(logit_scores)
+        return [round(self._clamp01(value), 6) for value in final_scores]
 
     def predict_chunk_score(self, chunk: list[dict[str, Any]]) -> float:
         scores = self.predict_chunk_scores([chunk])
@@ -301,11 +317,12 @@ class Poker44Model:
         calibrated_scores = self._apply_calibrator(internal_calibrated)
         remapped_scores = self._apply_score_remap(calibrated_scores)
         logit_scores = self._apply_score_logit(remapped_scores)
+        final_scores = self._apply_score_calibrator(logit_scores)
         return {
             "raw_scores": self._round_score_log_values(precal_scores),
             "calibrated_scores": self._round_score_log_values(calibrated_scores),
             "remapped_scores": self._round_score_log_values(remapped_scores),
-            "final_scores": self._round_score_log_values(logit_scores),
+            "final_scores": self._round_score_log_values(final_scores),
         }
 
     def benchmark_latency(

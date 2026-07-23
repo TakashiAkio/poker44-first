@@ -80,3 +80,5 @@ logs/
 
 # Local runtime registries / caches
 *.tmp
+
+/live_capture/
